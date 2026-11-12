@@ -1,0 +1,4 @@
+customer_id,region,segment,contract_type,payment_method,internet_service,tenure_months,monthly_charges,total_charges,num_complaints,support_calls
+TEST-0001,Jawa,Retail,Bulanan,E-Wallet,Fiber,8,450000,3600000,2,3
+TEST-0002,Sumatera,UMKM,Mingguan,Transfer Bank,DSL,3,300000,900000,1,1
+TEST-0003,Sulawesi,Korporat,Tahunan,Kartu Kredit,Fiber,30,800000,24000000,0,2
