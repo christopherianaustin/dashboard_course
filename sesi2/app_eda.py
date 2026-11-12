@@ -1,0 +1,439 @@
+# sesi2/app_eda.py — EDA interaktif di Streamlit dengan beragam visualisasi Plotly
+from pathlib import Path
+
+import pandas as pd
+pd.set_option("future.infer_string", False)  # hindari pyarrow acero (diblokir policy kantor)
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+ROOT = Path(__file__).resolve().parents[1]
+
+st.set_page_config(page_title="EDA Churn", page_icon="🔎", layout="wide")
+
+STATUS = {"Bertahan": "#2a78d6", "Churn": "#eb6834"}
+KATEGORI = ["#2a78d6", "#1baf7a", "#eda100", "#4a3aa7", "#e87ba4"]
+KONTRAK = ["Bulanan", "Tahunan", "Dua Tahun"]
+
+
+@st.cache_data
+def load_data():
+    df = pd.read_csv(ROOT / "data" / "customer_churn.csv", parse_dates=["signup_date"])
+    df["total_charges_missing"] = df["total_charges"].isna()  # catat sebelum imputasi
+    df["total_charges"] = df["total_charges"].fillna(df["total_charges"].median())
+    df["status"] = df["churn"].map({0: "Bertahan", 1: "Churn"})
+    df["kelompok_tenure"] = pd.cut(
+        df["tenure_months"],
+        [0, 12, 24, 48, 72],
+        labels=["0-12", "13-24", "25-48", "49-72"],
+    ).astype(str)
+    return df
+
+
+def gaya(fig, tinggi=360):
+    fig.update_layout(
+        template="plotly_white",
+        height=tinggi,
+        margin=dict(l=10, r=10, t=50, b=10),
+        title_font_size=15,
+        legend_title_text="",
+    )
+    return fig
+
+
+df = load_data()
+
+st.title("🔎 Exploratory Data Analysis — Customer Churn")
+st.caption("Data latihan sintetis · 3.000 pelanggan · pendaftaran Januari 2023 – Desember 2025")
+
+# ---------- KPI CARDS ----------
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Total pelanggan", f"{len(df):,}")
+k2.metric("Churn rate", f"{df.churn.mean():.1%}")
+k3.metric("Rata-rata tagihan", f"Rp{df.monthly_charges.mean():,.0f}".replace(",", "."))
+k4.metric("Rata-rata tenure", f"{df.tenure_months.mean():.1f} bln")
+k5.metric("Missing total_charges", f"{df.total_charges_missing.sum()} baris", help="Diisi median")
+
+tab = st.tabs(["🥧 Komposisi", "📊 Perbandingan", "📈 Distribusi", "⏱️ Tren", "🔗 Hubungan", "📋 Data", "😠 Keluhan", "📝 Latihan"])
+
+# ---------- 1. KOMPOSISI: pie, donut, treemap ----------
+with tab[0]:
+    c1, c2 = st.columns(2)
+
+    pie = px.pie(
+        df,
+        names="status",
+        color="status",
+        color_discrete_map=STATUS,
+        title="Satu dari tiga pelanggan churn",
+    )
+    pie.update_traces(textinfo="percent+label", textfont_size=14)
+    c1.plotly_chart(gaya(pie), width="stretch")
+
+    donut = px.pie(
+        df,
+        names="contract_type",
+        hole=0.55,
+        color_discrete_sequence=KATEGORI,
+        category_orders={"contract_type": KONTRAK},
+        title="Separuh pelanggan berkontrak bulanan",
+    )
+    donut.update_traces(textinfo="percent+label")
+    donut.add_annotation(text=f"{len(df):,}<br>pelanggan", showarrow=False, font_size=16)
+    c2.plotly_chart(gaya(donut), width="stretch")
+
+    # Treemap dibuat manual agar tidak memicu pyarrow acero (diblokir policy kantor)
+    tm = df.groupby(["region", "segment"], as_index=False).agg(
+        pelanggan=("customer_id", "count"),
+        churn=("churn", "sum"),
+    )
+    reg = tm.groupby("region", as_index=False)[["pelanggan", "churn"]].sum()
+
+    ids = reg["region"].tolist() + [f"{r}/{s}" for r, s in zip(tm["region"], tm["segment"])]
+    labels = reg["region"].tolist() + tm["segment"].tolist()
+    parents = [""] * len(reg) + tm["region"].tolist()
+    values = reg["pelanggan"].tolist() + tm["pelanggan"].tolist()
+    rates = (reg["churn"] / reg["pelanggan"]).tolist() + (tm["churn"] / tm["pelanggan"]).tolist()
+
+    tree = go.Figure(go.Treemap(
+        ids=ids,
+        labels=labels,
+        parents=parents,
+        values=values,
+        branchvalues="total",
+        marker=dict(
+            colors=rates,
+            colorscale="Oranges",
+            showscale=True,
+            colorbar=dict(title="Churn rate", tickformat=".0%"),
+        ),
+        hovertemplate="%{label}<br>Pelanggan: %{value}<br>Churn rate: %{color:.1%}<extra></extra>",
+    ))
+    tree.update_layout(title="Treemap: luas = jumlah pelanggan, warna = churn rate")
+    st.plotly_chart(gaya(tree, 420), width="stretch")
+
+# ---------- 2. PERBANDINGAN: bar, grouped bar, stacked 100% ----------
+with tab[1]:
+    kolom = st.selectbox(
+        "Bandingkan churn rate berdasarkan",
+        ["contract_type", "region", "segment", "payment_method", "internet_service"],
+    )
+    rk = (
+        df.groupby(kolom, as_index=False)
+        .agg(pelanggan=("customer_id", "count"), churn_rate=("churn", "mean"))
+        .sort_values("churn_rate")
+    )
+
+    bar = px.bar(
+        rk,
+        x="churn_rate",
+        y=kolom,
+        orientation="h",
+        text_auto=".1%",
+        color_discrete_sequence=["#eb6834"],
+        title=f"Churn rate per {kolom}",
+    )
+    bar.add_vline(x=df.churn.mean(), line_dash="dot", annotation_text="rata-rata")
+    bar.update_xaxes(tickformat=".0%")
+
+    c1, c2 = st.columns([3, 2])
+    c1.plotly_chart(gaya(bar), width="stretch")
+    c2.dataframe(
+        rk.sort_values("churn_rate", ascending=False)
+        .style.format({"churn_rate": "{:.1%}"})
+        .background_gradient(subset=["churn_rate"], cmap="Oranges"),
+        width="stretch",
+        hide_index=True,
+    )
+    # Latihan 6: unduh tabel ringkasan sebagai CSV
+    c2.download_button(
+        "⬇️ Unduh ringkasan (CSV)",
+        rk.sort_values("churn_rate", ascending=False).to_csv(index=False).encode("utf-8"),
+        file_name=f"ringkasan_churn_per_{kolom}.csv",
+        mime="text/csv",
+    )
+
+    c3, c4 = st.columns(2)
+
+    gb = df.groupby(["contract_type", "segment"], as_index=False)["churn"].mean()
+    grouped = px.bar(
+        gb,
+        x="contract_type",
+        y="churn",
+        color="segment",
+        barmode="group",
+        color_discrete_sequence=KATEGORI,
+        category_orders={"contract_type": KONTRAK},
+        title="Grouped bar: kontrak × segmen",
+    )
+    grouped.update_yaxes(tickformat=".0%")
+    c3.plotly_chart(gaya(grouped), width="stretch")
+
+    stacked = px.histogram(
+        df,
+        y="payment_method",
+        color="status",
+        barnorm="percent",
+        color_discrete_map=STATUS,
+        title="Stacked bar 100%: status per pembayaran",
+    )
+    stacked.update_layout(xaxis_title="Proporsi (%)", yaxis_title="")
+    c4.plotly_chart(gaya(stacked), width="stretch")
+
+# ---------- 3. DISTRIBUSI: histogram, box, violin ----------
+with tab[2]:
+    num = st.selectbox(
+        "Variabel numerik",
+        ["tenure_months", "monthly_charges", "num_complaints", "support_calls"],
+    )
+    c1, c2 = st.columns(2)
+
+    hist = px.histogram(
+        df,
+        x=num,
+        color="status",
+        barmode="overlay",
+        opacity=0.7,
+        nbins=30,
+        color_discrete_map=STATUS,
+        marginal="box",
+        title=f"Histogram {num}",
+    )
+    c1.plotly_chart(gaya(hist, 400), width="stretch")
+
+    vio = px.violin(
+        df,
+        x="contract_type",
+        y=num,
+        color="contract_type",
+        box=True,
+        color_discrete_sequence=KATEGORI,
+        category_orders={"contract_type": KONTRAK},
+        title=f"Violin {num} per kontrak",
+    )
+    c2.plotly_chart(gaya(vio, 400), width="stretch")
+
+# ---------- 4. TREN: line, area ----------
+with tab[3]:
+    bulanan = (
+        df.set_index("signup_date")
+        .resample("ME")["customer_id"]
+        .count()
+        .rename("pelanggan")
+        .reset_index()
+    )
+    bulanan["rata2_3bln"] = bulanan["pelanggan"].rolling(3).mean()
+
+    line = px.line(
+        bulanan,
+        x="signup_date",
+        y=["pelanggan", "rata2_3bln"],
+        markers=True,
+        color_discrete_sequence=["#9dbbe6", "#2a78d6"],
+        title="Pelanggan baru per bulan dan rata-rata bergerak 3 bulan",
+    )
+    st.plotly_chart(gaya(line), width="stretch")
+
+    c1, c2 = st.columns(2)
+
+    kt = df.groupby("kelompok_tenure", as_index=False)["churn"].mean()
+    lt = px.line(
+        kt,
+        x="kelompok_tenure",
+        y="churn",
+        markers=True,
+        text=kt["churn"].map("{:.1%}".format),
+        color_discrete_sequence=["#eb6834"],
+        title="Churn rate per kelompok tenure",
+    )
+    lt.update_traces(textposition="top center", marker_size=10)
+    lt.update_yaxes(tickformat=".0%", range=[0, 0.65])
+    c1.plotly_chart(gaya(lt), width="stretch")
+
+    q = (
+        df.assign(kuartal=df.signup_date.dt.to_period("Q").astype(str))
+        .groupby(["kuartal", "segment"], as_index=False)["customer_id"]
+        .count()
+    )
+    # Baris ini terpotong saat disalin; judul di bawah adalah rekonstruksi
+    area = px.area(
+        q,
+        x="kuartal",
+        y="customer_id",
+        color="segment",
+        color_discrete_sequence=KATEGORI,
+        title="Stacked area: pelanggan baru per kuartal",
+    )
+    c2.plotly_chart(gaya(area), width="stretch")
+
+# ---------- 5. HUBUNGAN: scatter, heatmap ----------
+with tab[4]:
+    c1, c2 = st.columns(2)
+
+    sc = px.scatter(
+        df,
+        x="tenure_months",
+        y="monthly_charges",
+        color="status",
+        opacity=0.55,
+        color_discrete_map=STATUS,
+        hover_name="customer_id",
+        hover_data=["contract_type", "num_complaints"],
+        title="Tenure vs tagihan",
+    )
+    c1.plotly_chart(gaya(sc, 420), width="stretch")
+
+    corr = df[["tenure_months", "monthly_charges", "num_complaints", "support_calls", "churn"]].corr()
+    hm = px.imshow(
+        corr.round(2),
+        text_auto=True,
+        color_continuous_scale="RdBu_r",
+        zmin=-1,
+        zmax=1,
+        title="Heatmap korelasi",
+    )
+    c2.plotly_chart(gaya(hm, 420), width="stretch")
+
+    pv = pd.pivot_table(df, values="churn", index="region", columns="segment", aggfunc="mean")
+    hm2 = px.imshow(
+        pv * 100,
+        text_auto=".1f",
+        color_continuous_scale="Oranges",
+        labels={"color": "Churn (%)"},
+        title="Heatmap churn rate region × segmen (%)",
+    )
+    st.plotly_chart(gaya(hm2, 360), width="stretch")
+
+# ---------- 6. DATA: profil + tabel ----------
+with tab[5]:
+    profil = pd.DataFrame({
+        "tipe": df.dtypes.astype(str),
+        "missing": df.isna().sum().where(
+            df.columns != "total_charges", df.total_charges_missing.sum()
+        ),
+        "unik": df.nunique(),
+    }).reset_index(names="kolom")
+
+    c1, c2 = st.columns([2, 3])
+    c1.markdown("**Profil kolom**")
+    c1.dataframe(profil, width="stretch", hide_index=True)
+    c2.markdown("**Statistik deskriptif**")
+    c2.dataframe(df.describe(include="number").T.round(1), width="stretch")
+
+    st.markdown("**10 baris pertama**")
+    st.dataframe(df.head(10), width="stretch", hide_index=True)
+
+# ---------- 7. KELUHAN (Latihan 5): churn rate per jumlah keluhan ----------
+with tab[6]:
+    kel = df.groupby("num_complaints", as_index=False).agg(
+        pelanggan=("customer_id", "count"),
+        churn_rate=("churn", "mean"),
+    )
+    bar_kel = px.bar(
+        kel,
+        x="num_complaints",
+        y="churn_rate",
+        text_auto=".1%",
+        hover_data=["pelanggan"],
+        color_discrete_sequence=["#eb6834"],
+        labels={"num_complaints": "Jumlah keluhan", "churn_rate": "Churn rate"},
+        title="Semakin banyak keluhan, semakin tinggi churn rate",
+    )
+    bar_kel.add_hline(y=df.churn.mean(), line_dash="dot", annotation_text="rata-rata")
+    bar_kel.update_yaxes(tickformat=".0%")
+    bar_kel.update_xaxes(dtick=1)
+    st.plotly_chart(gaya(bar_kel, 400), width="stretch")
+    st.caption("Arahkan kursor ke batang untuk melihat jumlah pelanggan; kelompok keluhan tinggi berisi sedikit pelanggan.")
+
+# ---------- 8. LATIHAN MANDIRI SESI 2 no. 1–4 ----------
+with tab[7]:
+    # Latihan 1: pie vs donut vs bar horizontal terurut
+    st.subheader("Latihan 1 — Pie, donut, atau bar horizontal?")
+    c1, c2, c3 = st.columns(3)
+
+    pie_is = px.pie(
+        df,
+        names="internet_service",
+        color_discrete_sequence=KATEGORI,
+        title="Pie: Fiber dipakai hampir separuh pelanggan",
+    )
+    pie_is.update_traces(textinfo="percent+label")
+    c1.plotly_chart(gaya(pie_is.update_layout(showlegend=False)), width="stretch")
+
+    donut_reg = px.pie(
+        df,
+        names="region",
+        hole=0.55,
+        color_discrete_sequence=KATEGORI,
+        title="Donut: 5 irisan sulit dibandingkan",
+    )
+    donut_reg.update_traces(textinfo="percent")
+    donut_reg.add_annotation(text=f"{len(df):,}<br>pelanggan", showarrow=False, font_size=14)
+    c2.plotly_chart(gaya(donut_reg), width="stretch")
+
+    reg_cnt = df["region"].value_counts().rename_axis("region").reset_index(name="pelanggan")
+    reg_cnt["porsi"] = reg_cnt["pelanggan"] / len(df)
+    barh_reg = px.bar(
+        reg_cnt.sort_values("pelanggan"),
+        x="pelanggan",
+        y="region",
+        orientation="h",
+        text=reg_cnt.sort_values("pelanggan")["porsi"].map("{:.0%}".format),
+        color_discrete_sequence=["#2a78d6"],
+        labels={"pelanggan": "Jumlah pelanggan", "region": ""},
+        title="Bar terurut: Jawa menyumbang pelanggan terbanyak",
+    )
+    c3.plotly_chart(gaya(barh_reg), width="stretch")
+    st.info(
+        "Jawaban: untuk 5 kategori, bar horizontal terurut lebih mudah dibaca daripada donut — "
+        "peringkat dan selisih langsung terlihat dari panjang batang. Pie/donut cukup untuk 2–3 kategori."
+    )
+
+    # Latihan 2 & 3
+    c4, c5 = st.columns(2)
+    with c4:
+        st.subheader("Latihan 2 — Stacked bar 100%")
+        stacked_is = px.histogram(
+            df,
+            y="internet_service",
+            color="status",
+            barnorm="percent",
+            color_discrete_map=STATUS,
+            text_auto=".1f",
+            title="Layanan internet bukan pembeda churn",
+        )
+        stacked_is.update_layout(xaxis_title="Proporsi (%)", yaxis_title="")
+        st.plotly_chart(gaya(stacked_is), width="stretch")
+    with c5:
+        st.subheader("Latihan 3 — Box plot panggilan CS")
+        box_cs = px.box(
+            df,
+            x="status",
+            y="support_calls",
+            color="status",
+            color_discrete_map=STATUS,
+            category_orders={"status": ["Bertahan", "Churn"]},
+            labels={"status": "", "support_calls": "Jumlah panggilan ke CS"},
+            title="Median sama, tetapi sebaran panggilan CS lebih lebar pada churn",
+        )
+        st.plotly_chart(gaya(box_cs.update_layout(showlegend=False)), width="stretch")
+
+    # Latihan 4
+    st.subheader("Latihan 4 — Churn rate per kuartal pendaftaran")
+    cq = (
+        df.assign(kuartal=df.signup_date.dt.to_period("Q").astype(str))
+        .groupby("kuartal", as_index=False)["churn"]
+        .mean()
+    )
+    line_q = px.line(
+        cq,
+        x="kuartal",
+        y="churn",
+        markers=True,
+        color_discrete_sequence=["#eb6834"],
+        labels={"kuartal": "Kuartal pendaftaran", "churn": "Churn rate"},
+        title="Churn rate per kuartal pendaftaran relatif stabil (31–39%)",
+    )
+    line_q.add_hline(y=df.churn.mean(), line_dash="dot", annotation_text="rata-rata")
+    line_q.update_yaxes(tickformat=".0%", range=[0, 0.5])
+    st.plotly_chart(gaya(line_q), width="stretch")
