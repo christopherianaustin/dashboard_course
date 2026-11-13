@@ -6,10 +6,10 @@ import plotly.express as px
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT))                       # agar folder utils bisa di-import
+sys.path.append(str(ROOT))                      # agar folder utils bisa di-import
 from utils.model_utils import load_model, load_metadata, validate_input, predict
 
-st.set_page_config(page_title="Prediksi Churn", page_icon="🔮", layout="wide")
+st.set_page_config(page_title="Prediksi Churn", page_icon="🤖", layout="wide")
 
 
 # 1) LOAD MODEL — sekali saja, disimpan di cache
@@ -25,7 +25,7 @@ def get_meta():
 
 model, meta = get_model(), get_meta()
 
-st.title("🔮 Prediksi Risiko Churn Pelanggan")
+st.title("🤖 Prediksi Risiko Churn Pelanggan")
 with st.expander("ℹ️ Informasi model final", expanded=False):
     st.write(f"**{meta['model_name']}** · versi {meta['model_version']} · {meta['algorithm']}")
     st.write("Fitur input:", ", ".join(meta["feature_order"]))

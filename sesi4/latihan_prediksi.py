@@ -1,9 +1,9 @@
 # sesi4/latihan_prediksi.py — Latihan mandiri Sesi 4 no. 1–4
-# Pengembangan dari app_prediksi.py:
-#   1. threshold keputusan lewat st.slider (0,3–0,7) di sidebar
-#   2. uji validasi: upload sesi4/contoh_kontrak_salah.csv (contract_type "Mingguan")
-#   3. tabel ringkasan region x risk_category (pd.crosstab)
-#   4. potensi pendapatan berisiko = jumlah monthly_charges pelanggan kategori Tinggi
+# Dasar: app_prediksi.py, ditambah:
+#   1. Slider threshold keputusan (0,3–0,7) di sidebar
+#   2. Validasi CSV — uji dengan sesi4/contoh_kontrak_salah.csv
+#   3. Tabel ringkasan region × risk_category (pd.crosstab)
+#   4. Potensi pendapatan berisiko = jumlah monthly_charges pelanggan berkategori Tinggi
 import sys
 from pathlib import Path
 import pandas as pd
@@ -11,10 +11,10 @@ import plotly.express as px
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT))                       # agar folder utils bisa di-import
+sys.path.append(str(ROOT))                      # agar folder utils bisa di-import
 from utils.model_utils import load_model, load_metadata, validate_input, predict
 
-st.set_page_config(page_title="Prediksi Churn — Latihan", page_icon="🔮", layout="wide")
+st.set_page_config(page_title="Prediksi Churn — Latihan", page_icon="🤖", layout="wide")
 
 
 @st.cache_resource
@@ -27,34 +27,29 @@ def get_meta():
     return load_metadata()
 
 
-def rupiah(x):
-    return f"Rp{x:,.0f}".replace(",", ".")
+model, meta_asli = get_model(), get_meta()
 
-
-model = get_model()
-
-# No. 1 — threshold keputusan di sidebar.
-# dict(...) membuat salinan meta, sehingga data cache dan file JSON asli tidak berubah.
-meta = dict(get_meta())
+# ---------- Latihan 1: threshold keputusan dari slider di sidebar ----------
 st.sidebar.header("⚙️ Pengaturan")
-threshold = st.sidebar.slider("Threshold keputusan", 0.3, 0.7, float(meta["decision_threshold"]), 0.05,
-                              help="Probabilitas ≥ threshold diprediksi Churn")
-meta["decision_threshold"] = threshold
-st.sidebar.caption(f"Default model: {get_meta()['decision_threshold']}. "
-                   "Kategori risiko (Rendah/Sedang/Tinggi) tidak ikut berubah.")
+threshold = st.sidebar.slider("Threshold keputusan", min_value=0.30, max_value=0.70,
+                              value=float(meta_asli["decision_threshold"]), step=0.05)
+st.sidebar.caption("Probabilitas ≥ threshold → diprediksi churn. Kategori risiko tidak berubah "
+                   "karena memakai risk bins yang tetap.")
+meta = {**meta_asli, "decision_threshold": threshold}   # salinan; metadata asli tidak diubah
 
-st.title("🔮 Prediksi Risiko Churn Pelanggan")
+st.title("🤖 Prediksi Risiko Churn Pelanggan — Latihan")
 with st.expander("ℹ️ Informasi model final", expanded=False):
     st.write(f"**{meta['model_name']}** · versi {meta['model_version']} · {meta['algorithm']}")
     st.write("Fitur input:", ", ".join(meta["feature_order"]))
-    st.write(f"Threshold keputusan: {meta['decision_threshold']} · "
-             f"Risk bins: {meta['risk_bins']}")
+    st.write(f"Threshold keputusan: {meta['decision_threshold']:.2f} "
+             f"(bawaan model {meta_asli['decision_threshold']}) · Risk bins: {meta['risk_bins']}")
     st.caption("Model tidak dilatih ulang di aplikasi ini; aplikasi hanya melakukan inference.")
 
 COLOR = {"Rendah": "🟢", "Sedang": "🟡", "Tinggi": "🔴"}
+RISK_ORDER = ["Rendah", "Sedang", "Tinggi"]
 tab_single, tab_batch = st.tabs(["👤 Prediksi satu pelanggan", "📂 Prediksi batch (CSV)"])
 
-# PREDIKSI SATU PELANGGAN
+# ---------- Prediksi satu pelanggan ----------
 with tab_single:
     cats = meta["categories"]
     with st.form("form_prediksi"):
@@ -86,7 +81,7 @@ with tab_single:
             m1, m2, m3 = st.columns(3)
             m1.metric("Probabilitas churn", f"{res.churn_probability:.1%}")
             m2.metric("Prediksi", "Churn" if res.predicted_churn else "Bertahan",
-                      help=f"Threshold {threshold}")
+                      help=f"Threshold {threshold:.2f}")
             m3.metric("Kategori risiko", f"{COLOR[res.risk_category]} {res.risk_category}")
             st.progress(float(res.churn_probability))
             if res.risk_category == "Tinggi":
@@ -97,11 +92,11 @@ with tab_single:
             else:
                 st.success("Rekomendasi: pertahankan layanan standar.")
 
-# PREDIKSI BATCH
+# ---------- Prediksi batch ----------
 with tab_batch:
     up = st.file_uploader("Upload CSV pelanggan baru (format sama dengan data/new_customers.csv)",
                           type="csv")
-    st.caption("No. 2 — coba upload `sesi4/contoh_kontrak_salah.csv` untuk melihat pesan validasi.")
+    st.caption("Latihan 2: upload sesi4/contoh_kontrak_salah.csv untuk melihat pesan validasi.")
     pakai_contoh = st.checkbox("Gunakan contoh data/new_customers.csv", value=up is None)
     if up is not None:
         data = pd.read_csv(up)
@@ -111,7 +106,7 @@ with tab_batch:
         st.info("Upload file atau centang contoh data.")
         st.stop()
 
-    # No. 2 — validasi menolak kategori yang tidak dikenal model
+    # Latihan 2: validasi sebelum prediksi — kategori salah seperti "Mingguan" ditolak
     errs = validate_input(data, meta)
     if errs:
         for e in errs:
@@ -119,21 +114,23 @@ with tab_batch:
         st.stop()
 
     hasil = predict(model, data, meta)
-    berisiko = hasil.loc[hasil.risk_category == "Tinggi", "monthly_charges"].sum()   # No. 4
+    tinggi = hasil[hasil.risk_category == "Tinggi"]
 
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Pelanggan diproses", f"{len(hasil):,}")
-    k2.metric("Prediksi churn", f"{hasil.predicted_churn.sum():,}", help=f"Threshold {threshold}")
+    k2.metric("Prediksi churn", f"{hasil.predicted_churn.sum():,}",
+              help=f"Probabilitas ≥ threshold {threshold:.2f}")
     k3.metric("Rata-rata probabilitas", f"{hasil.churn_probability.mean():.1%}")
-    k4.metric("Risiko tinggi", f"{(hasil.risk_category == 'Tinggi').sum():,}")
-    k5.metric("Pendapatan berisiko / bulan", rupiah(berisiko),
-              help="Jumlah tagihan bulanan pelanggan berkategori risiko Tinggi")
+    k4.metric("Risiko tinggi", f"{len(tinggi):,}")
+    # Latihan 4: potensi pendapatan berisiko
+    k5.metric("Pendapatan berisiko / bulan", f"Rp{tinggi.monthly_charges.sum():,.0f}".replace(",", "."),
+              help="Jumlah monthly_charges pelanggan berkategori Tinggi")
 
     RISK_COLOR = {"Rendah": "#1baf7a", "Sedang": "#eda100", "Tinggi": "#e34948"}
     a, b = st.columns(2)
     donut = px.pie(hasil, names="risk_category", hole=0.55, color="risk_category",
                    color_discrete_map=RISK_COLOR, title="Komposisi kategori risiko",
-                   category_orders={"risk_category": ["Rendah", "Sedang", "Tinggi"]})
+                   category_orders={"risk_category": RISK_ORDER})
     donut.update_traces(textinfo="percent+label")
     a.plotly_chart(donut.update_layout(height=330, showlegend=False), width="stretch")
     pk = hasil.groupby("contract_type", as_index=False)["churn_probability"].mean()
@@ -143,11 +140,11 @@ with tab_batch:
     b.plotly_chart(bar.update_layout(height=330, template="plotly_white", xaxis_title=""),
                    width="stretch")
 
-    # No. 3 — ringkasan jumlah pelanggan per region x kategori risiko
-    st.markdown("**Jumlah pelanggan per region × kategori risiko**")
-    ct = pd.crosstab(hasil.region, hasil.risk_category, margins=True, margins_name="Total")
-    ct = ct[[c for c in ["Rendah", "Sedang", "Tinggi", "Total"] if c in ct.columns]]
-    st.dataframe(ct, width="stretch")
+    # Latihan 3: ringkasan region × risk_category
+    st.subheader("Jumlah pelanggan per region × kategori risiko")
+    ringkas = pd.crosstab(hasil["region"], hasil["risk_category"], margins=True, margins_name="Total")
+    ringkas = ringkas.reindex(columns=[c for c in RISK_ORDER + ["Total"] if c in ringkas.columns])
+    st.dataframe(ringkas, width="stretch")
 
     risiko = st.multiselect("Tampilkan kategori risiko", ["Tinggi", "Sedang", "Rendah"],
                             default=["Tinggi"])
