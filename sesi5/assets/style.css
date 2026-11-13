@@ -1,0 +1,51 @@
+/* sesi5/assets/style.css — Latihan 4: gaya dipindah dari dict Python ke file CSS.
+   Dash memuat file ini otomatis. Semua aturan memakai class, sehingga app_halo.py dan
+   app_dash_dasar.py (yang tidak memakai className) tidak terpengaruh. */
+
+.halaman {
+  font-family: Arial, sans-serif;
+  max-width: 1100px;
+  margin: auto;
+  padding: 20px;
+}
+
+.baris-kartu {
+  display: flex;
+  gap: 12px;
+}
+
+.kartu {
+  flex: 1;
+  padding: 16px;
+  border-radius: 10px;
+  background: #F4F6FA;
+  text-align: center;
+}
+
+.kartu-judul {
+  margin: 0;
+  color: #555;
+}
+
+.kartu-nilai {
+  margin: 4px 0 0 0;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.catatan {
+  margin-top: 0;
+  color: #777;
+  font-size: 13px;
+}
+
+/* Layar sempit: kartu dan grafik ditumpuk */
+@media (max-width: 760px) {
+  .baris-kartu { flex-wrap: wrap; }
+  .kartu { flex: 1 1 40%; }
+  .grid-2 { grid-template-columns: 1fr; }
+}
